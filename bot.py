@@ -2,25 +2,19 @@ import os
 import discord
 from discord.ext import commands
 
+# =========================
+# TOKEN (RAILWAY ENV)
+# =========================
 TOKEN = os.getenv("TOKEN")
 
 if not TOKEN:
-    raise ValueError("TOKEN fehlt in Railway Variables!")
+    raise ValueError("❌ TOKEN fehlt! Setze ihn in Railway Variables als TOKEN")
 
 intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
-
-# =========================
-# AUTO COMMAND REGISTRY
-# =========================
-command_list = {}
-
-def register(name, desc):
-    command_list[name] = desc
-
 
 # =========================
 # TICKET SYSTEM
@@ -71,14 +65,13 @@ class TicketModal(discord.ui.Modal, title="Ticket erstellen"):
             overwrites=overwrites
         )
 
-        await channel.send(
-            embed=discord.Embed(
-                title="🎫 Ticket geöffnet",
-                description=f"User: {user.mention}\nGrund: {self.reason.value}",
-                color=0x00ff00
-            ),
-            view=TicketControlView()
+        embed = discord.Embed(
+            title="🎫 Ticket geöffnet",
+            description=f"User: {user.mention}\nGrund: {self.reason.value}",
+            color=0x00ff00
         )
+
+        await channel.send(embed=embed, view=TicketControlView())
 
         tickets[channel.id] = {
             "owner": user.id,
@@ -86,7 +79,7 @@ class TicketModal(discord.ui.Modal, title="Ticket erstellen"):
             "reason": self.reason.value
         }
 
-        await interaction.response.send_message("Ticket erstellt!", ephemeral=True)
+        await interaction.response.send_message("✅ Ticket erstellt!", ephemeral=True)
 
 
 class TicketControlView(discord.ui.View):
@@ -99,21 +92,21 @@ class TicketControlView(discord.ui.View):
         data = tickets.get(interaction.channel.id)
 
         if not data:
-            return await interaction.response.send_message("Fehler", ephemeral=True)
+            return await interaction.response.send_message("❌ Fehler", ephemeral=True)
 
         if interaction.user.id == data["owner"]:
-            return await interaction.response.send_message("Eigene Tickets nicht übernehmen", ephemeral=True)
+            return await interaction.response.send_message("❌ eigenes Ticket geht nicht", ephemeral=True)
 
         if data["claimed_by"]:
-            return await interaction.response.send_message("Schon übernommen", ephemeral=True)
+            return await interaction.response.send_message("❌ schon übernommen", ephemeral=True)
 
         if not has_ticket_access(interaction.user):
-            return await interaction.response.send_message("Keine Rechte", ephemeral=True)
+            return await interaction.response.send_message("❌ keine Rechte", ephemeral=True)
 
         data["claimed_by"] = interaction.user.id
 
         await interaction.channel.send(f"📌 Übernommen von {interaction.user.mention}")
-        await interaction.response.send_message("OK", ephemeral=True)
+        await interaction.response.send_message("✅ übernommen", ephemeral=True)
 
     @discord.ui.button(label="🔒 Schließen", style=discord.ButtonStyle.red)
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -128,18 +121,19 @@ class CloseModal(discord.ui.Modal, title="Ticket schließen"):
         data = tickets.get(interaction.channel.id)
 
         if not data:
-            return await interaction.response.send_message("Fehler", ephemeral=True)
+            return await interaction.response.send_message("❌ Fehler", ephemeral=True)
 
         user = interaction.user
 
         if not (user.guild_permissions.administrator or user.id in [data["owner"], data["claimed_by"]]):
-            return await interaction.response.send_message("Keine Rechte", ephemeral=True)
+            return await interaction.response.send_message("❌ keine Rechte", ephemeral=True)
 
+        # DM an Owner
         try:
             owner = await bot.fetch_user(data["owner"])
             await owner.send(
                 embed=discord.Embed(
-                    title="Ticket geschlossen",
+                    title="🔒 Ticket geschlossen",
                     description=f"Grund: {self.reason.value}",
                     color=0xff0000
                 )
@@ -148,7 +142,7 @@ class CloseModal(discord.ui.Modal, title="Ticket schließen"):
             pass
 
         await interaction.channel.send(
-            f"Geschlossen von {user.mention}\nGrund: {self.reason.value}"
+            f"🔒 geschlossen von {user.mention}\nGrund: {self.reason.value}"
         )
 
         tickets.pop(interaction.channel.id, None)
@@ -156,58 +150,21 @@ class CloseModal(discord.ui.Modal, title="Ticket schließen"):
 
 
 # =========================
-# COMMAND SYSTEM (AUTO)
+# COMMANDS
 # =========================
-def cmd(name, desc):
-    register(name, desc)
 
-
-# =========================
-# BASIC COMMANDS
-# =========================
-@bot.command()
+@bot.command(help="Ping des Bots anzeigen")
 async def ping(ctx):
     await ctx.send(f"Pong 🏓 `{round(bot.latency * 1000)}ms`")
 
-register("ping", "Bot Ping anzeigen")
 
-
-@bot.command()
+@bot.command(help="Nachricht senden")
 async def say(ctx, *, msg):
     await ctx.message.delete()
     await ctx.send(msg)
 
-register("say", "Nachricht senden")
 
-
-@bot.command()
-async def help(ctx):
-    embed = discord.Embed(title="📜 Help", color=0x3498db)
-
-    for name, desc in command_list.items():
-        embed.add_field(name=f"!{name}", value=desc, inline=False)
-
-    await ctx.send(embed=embed)
-
-register("help", "Alle Commands anzeigen")
-
-
-@bot.command()
-async def cmds(ctx):
-    embed = discord.Embed(title="📜 Commands", color=0x5865F2)
-
-    for name, desc in command_list.items():
-        embed.add_field(name=f"!{name}", value=desc, inline=False)
-
-    await ctx.send(embed=embed)
-
-register("cmds", "Command Liste anzeigen")
-
-
-# =========================
-# USER INFO
-# =========================
-@bot.command()
+@bot.command(help="User Informationen")
 async def userinfo(ctx, member: discord.Member = None):
     member = member or ctx.author
 
@@ -217,13 +174,8 @@ async def userinfo(ctx, member: discord.Member = None):
 
     await ctx.send(embed=embed)
 
-register("userinfo", "User Infos anzeigen")
 
-
-# =========================
-# SERVER INFO
-# =========================
-@bot.command()
+@bot.command(help="Server Informationen")
 async def serverinfo(ctx):
     g = ctx.guild
 
@@ -233,13 +185,8 @@ async def serverinfo(ctx):
 
     await ctx.send(embed=embed)
 
-register("serverinfo", "Server Infos anzeigen")
 
-
-# =========================
-# SERVER LIST
-# =========================
-@bot.command()
+@bot.command(help="Alle Server mit Invite anzeigen")
 async def serverlist(ctx):
 
     embed = discord.Embed(title="🌐 Server Liste", color=0x5865F2)
@@ -262,13 +209,8 @@ async def serverlist(ctx):
 
     await ctx.send(embed=embed)
 
-register("serverlist", "Alle Server anzeigen")
 
-
-# =========================
-# TICKET PANEL
-# =========================
-@bot.command()
+@bot.command(help="Ticket System öffnen")
 async def ticketpanel(ctx):
     embed = discord.Embed(
         title="🎫 Ticket System",
@@ -277,21 +219,32 @@ async def ticketpanel(ctx):
     )
     await ctx.send(embed=embed, view=TicketPanel())
 
-register("ticketpanel", "Ticket System öffnen")
 
-
-# =========================
-# ROLE SYSTEM
-# =========================
-@bot.command()
+@bot.command(help="Ticket Role hinzufügen (nur Owner)")
 async def addticketrole(ctx, role: discord.Role):
     if ctx.guild.owner_id != ctx.author.id:
-        return await ctx.send("Nur Owner")
+        return await ctx.send("❌ nur Owner")
 
     ticket_roles.append(role.id)
-    await ctx.send("Role hinzugefügt")
+    await ctx.send("✅ Role hinzugefügt")
 
-register("addticketrole", "Ticket Rechte setzen")
+
+@bot.command(help="Alle Commands anzeigen")
+async def cmds(ctx):
+
+    embed = discord.Embed(title="📜 Commands", color=0x5865F2)
+
+    for command in bot.commands:
+        if command.hidden:
+            continue
+
+        embed.add_field(
+            name=f"!{command.name}",
+            value=command.help or "Keine Beschreibung",
+            inline=False
+        )
+
+    await ctx.send(embed=embed)
 
 
 # =========================
