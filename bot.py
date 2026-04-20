@@ -14,17 +14,16 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # =========================
-# COMMAND REGISTRY (NEU)
+# AUTO COMMAND REGISTRY
 # =========================
-command_list = []
+command_list = {}
 
-
-def register_command(name: str, desc: str):
-    command_list.append((name, desc))
+def register(name, desc):
+    command_list[name] = desc
 
 
 # =========================
-# TICKET SYSTEM DATA
+# TICKET SYSTEM
 # =========================
 ticket_roles = []
 tickets = {}
@@ -148,28 +147,29 @@ class CloseModal(discord.ui.Modal, title="Ticket schließen"):
         except:
             pass
 
-        await interaction.channel.send(f"Geschlossen von {user.mention}\nGrund: {self.reason.value}")
+        await interaction.channel.send(
+            f"Geschlossen von {user.mention}\nGrund: {self.reason.value}"
+        )
 
         tickets.pop(interaction.channel.id, None)
         await interaction.channel.delete()
 
 
 # =========================
-# COMMAND HELPER
+# COMMAND SYSTEM (AUTO)
 # =========================
 def cmd(name, desc):
-    register_command(name, desc)
+    register(name, desc)
 
 
 # =========================
-# COMMANDS
+# BASIC COMMANDS
 # =========================
 @bot.command()
 async def ping(ctx):
     await ctx.send(f"Pong 🏓 `{round(bot.latency * 1000)}ms`")
 
-
-cmd("ping", "Bot Ping anzeigen")
+register("ping", "Bot Ping anzeigen")
 
 
 @bot.command()
@@ -177,29 +177,31 @@ async def say(ctx, *, msg):
     await ctx.message.delete()
     await ctx.send(msg)
 
-
-cmd("say", "Nachricht senden")
+register("say", "Nachricht senden")
 
 
 @bot.command()
 async def help(ctx):
     embed = discord.Embed(title="📜 Help", color=0x3498db)
-    for name, desc in command_list:
+
+    for name, desc in command_list.items():
         embed.add_field(name=f"!{name}", value=desc, inline=False)
+
     await ctx.send(embed=embed)
 
-
-cmd("help", "Command Liste anzeigen")
+register("help", "Alle Commands anzeigen")
 
 
 @bot.command()
 async def cmds(ctx):
     embed = discord.Embed(title="📜 Commands", color=0x5865F2)
 
-    for name, desc in command_list:
+    for name, desc in command_list.items():
         embed.add_field(name=f"!{name}", value=desc, inline=False)
 
     await ctx.send(embed=embed)
+
+register("cmds", "Command Liste anzeigen")
 
 
 # =========================
@@ -215,8 +217,7 @@ async def userinfo(ctx, member: discord.Member = None):
 
     await ctx.send(embed=embed)
 
-
-cmd("userinfo", "User Infos anzeigen")
+register("userinfo", "User Infos anzeigen")
 
 
 # =========================
@@ -232,12 +233,11 @@ async def serverinfo(ctx):
 
     await ctx.send(embed=embed)
 
-
-cmd("serverinfo", "Server Infos anzeigen")
+register("serverinfo", "Server Infos anzeigen")
 
 
 # =========================
-# SERVERLIST
+# SERVER LIST
 # =========================
 @bot.command()
 async def serverlist(ctx):
@@ -246,6 +246,7 @@ async def serverlist(ctx):
 
     for guild in bot.guilds:
         invite = None
+
         try:
             for c in guild.text_channels:
                 invite = await c.create_invite(max_age=300)
@@ -261,8 +262,7 @@ async def serverlist(ctx):
 
     await ctx.send(embed=embed)
 
-
-cmd("serverlist", "Alle Server anzeigen")
+register("serverlist", "Alle Server anzeigen")
 
 
 # =========================
@@ -277,8 +277,7 @@ async def ticketpanel(ctx):
     )
     await ctx.send(embed=embed, view=TicketPanel())
 
-
-cmd("ticketpanel", "Ticket System öffnen")
+register("ticketpanel", "Ticket System öffnen")
 
 
 # =========================
@@ -292,8 +291,7 @@ async def addticketrole(ctx, role: discord.Role):
     ticket_roles.append(role.id)
     await ctx.send("Role hinzugefügt")
 
-
-cmd("addticketrole", "Ticket Rechte setzen")
+register("addticketrole", "Ticket Rechte setzen")
 
 
 # =========================
