@@ -5,7 +5,7 @@ from discord.ext import commands
 # =========================
 # TOKEN (RAILWAY ENV)
 # =========================
-TOKEN = os.getenv("MTQ3NzQ4NTM5ODk3NTU3ODEyNA.GQc-ua.FRTis_oeyGxUut5O5kZ-nuT-iCgXTDQnJBBCyU")
+TOKEN = os.getenv("TOKEN")
 
 if TOKEN is None:
     raise ValueError("❌ TOKEN fehlt! Setze ihn in Railway Variables als TOKEN")
