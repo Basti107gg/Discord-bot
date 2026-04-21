@@ -4,7 +4,6 @@ from discord.ext import commands, tasks
 from datetime import datetime, timedelta
 
 TOKEN = os.getenv("TOKEN")
-
 OWNER_ID = 1037047883133890560
 
 intents = discord.Intents.default()
@@ -16,9 +15,9 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # DATA
 # =========================
 command_roles = {}
-global_bans = {}  # user_id: reason
-temp_bans = {}    # guild_id: {user_id: unban_time}
-perm_bans = {}    # guild_id: [user_ids]
+global_bans = {}
+temp_bans = {}
+perm_bans = {}
 
 # =========================
 # PERMISSION CHECK
@@ -34,7 +33,7 @@ def has_permission(interaction, cmd):
     return any(r.id in roles for r in interaction.user.roles)
 
 # =========================
-# AUTO UNBAN TASK
+# AUTO UNBAN LOOP
 # =========================
 @tasks.loop(seconds=10)
 async def check_temp_bans():
@@ -52,6 +51,7 @@ async def check_temp_bans():
                     await guild.unban(user)
                 except:
                     pass
+
                 del temp_bans[guild_id][user_id]
 
 # =========================
@@ -76,7 +76,7 @@ async def globalban(interaction: discord.Interaction, user: discord.User, reason
 # =========================
 # GLOBAL UNBAN
 # =========================
-@bot.tree.command(name="globalunban", description="Global unban")
+@bot.tree.command(name="globalunban", description="Global entbannen")
 async def globalunban(interaction: discord.Interaction, user: discord.User):
 
     if interaction.user.id != OWNER_ID:
@@ -95,17 +95,18 @@ async def globalunban(interaction: discord.Interaction, user: discord.User):
 # =========================
 # TEMP BAN
 # =========================
-@bot.tree.command(name="ban", description="Temporärer Ban")
+@bot.tree.command(name="ban", description="Temporärer Ban (Minuten)")
 async def ban(interaction: discord.Interaction, member: discord.Member, minutes: int, reason: str):
 
     if not has_permission(interaction, "ban"):
         return await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
 
-    await member.ban(reason=reason)
+    try:
+        await member.ban(reason=reason)
+    except Exception as e:
+        return await interaction.response.send_message(f"❌ Fehler: {e}", ephemeral=True)
 
-    if interaction.guild.id not in temp_bans:
-        temp_bans[interaction.guild.id] = {}
-
+    temp_bans.setdefault(interaction.guild.id, {})
     temp_bans[interaction.guild.id][member.id] = datetime.utcnow() + timedelta(minutes=minutes)
 
     await interaction.response.send_message(f"⏳ {member} gebannt für {minutes} Minuten")
@@ -119,11 +120,12 @@ async def permban(interaction: discord.Interaction, member: discord.Member, reas
     if not has_permission(interaction, "permban"):
         return await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
 
-    await member.ban(reason=reason)
+    try:
+        await member.ban(reason=reason)
+    except Exception as e:
+        return await interaction.response.send_message(f"❌ Fehler: {e}", ephemeral=True)
 
-    if interaction.guild.id not in perm_bans:
-        perm_bans[interaction.guild.id] = []
-
+    perm_bans.setdefault(interaction.guild.id, [])
     perm_bans[interaction.guild.id].append(member.id)
 
     await interaction.response.send_message(f"🔨 {member} permanent gebannt")
@@ -131,7 +133,7 @@ async def permban(interaction: discord.Interaction, member: discord.Member, reas
 # =========================
 # UNBAN
 # =========================
-@bot.tree.command(name="unban", description="Unban")
+@bot.tree.command(name="unban", description="Entbannt User")
 async def unban(interaction: discord.Interaction, user: discord.User):
 
     if not has_permission(interaction, "unban"):
@@ -139,15 +141,13 @@ async def unban(interaction: discord.Interaction, user: discord.User):
 
     try:
         await interaction.guild.unban(user)
-    except:
-        pass
+    except Exception as e:
+        return await interaction.response.send_message(f"❌ Fehler: {e}", ephemeral=True)
 
-    if interaction.guild.id in temp_bans:
-        temp_bans[interaction.guild.id].pop(user.id, None)
+    temp_bans.get(interaction.guild.id, {}).pop(user.id, None)
 
-    if interaction.guild.id in perm_bans:
-        if user.id in perm_bans[interaction.guild.id]:
-            perm_bans[interaction.guild.id].remove(user.id)
+    if user.id in perm_bans.get(interaction.guild.id, []):
+        perm_bans[interaction.guild.id].remove(user.id)
 
     await interaction.response.send_message(f"✅ {user} entbannt")
 
@@ -160,20 +160,15 @@ async def banlist(interaction: discord.Interaction):
     if not has_permission(interaction, "banlist"):
         return await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
 
-    embed = discord.Embed(title="Banliste")
+    embed = discord.Embed(title="📜 Banliste")
 
-    # Global
     for uid, reason in global_bans.items():
         embed.add_field(name=f"🌍 {uid}", value=f"Global: {reason}", inline=False)
 
-    # Temp
-    guild_temp = temp_bans.get(interaction.guild.id, {})
-    for uid, time in guild_temp.items():
-        embed.add_field(name=f"⏳ {uid}", value=f"Bis: {time}", inline=False)
+    for uid, t in temp_bans.get(interaction.guild.id, {}).items():
+        embed.add_field(name=f"⏳ {uid}", value=f"Bis: {t}", inline=False)
 
-    # Perm
-    guild_perm = perm_bans.get(interaction.guild.id, [])
-    for uid in guild_perm:
+    for uid in perm_bans.get(interaction.guild.id, []):
         embed.add_field(name=f"🔨 {uid}", value="Permanent", inline=False)
 
     await interaction.response.send_message(embed=embed)
@@ -181,7 +176,7 @@ async def banlist(interaction: discord.Interaction):
 # =========================
 # SERVERLIST
 # =========================
-@bot.tree.command(name="serverlist", description="Server Liste")
+@bot.tree.command(name="serverlist", description="Alle Server anzeigen")
 async def serverlist(interaction: discord.Interaction):
 
     if interaction.user.id != OWNER_ID:
@@ -208,17 +203,15 @@ async def serverlist(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed)
 
 # =========================
-# SET COMMAND ROLE
+# SET CMD ROLE
 # =========================
-@bot.tree.command(name="setcmdrole", description="Setzt Rolle für Command")
+@bot.tree.command(name="setcmdrole", description="Setzt Rollenrechte")
 async def setcmdrole(interaction: discord.Interaction, command: str, role: discord.Role):
 
     if interaction.guild.owner_id != interaction.user.id:
         return await interaction.response.send_message("❌ Nur Owner", ephemeral=True)
 
-    if command not in command_roles:
-        command_roles[command] = []
-
+    command_roles.setdefault(command, [])
     command_roles[command].append(role.id)
 
     await interaction.response.send_message(f"✅ Rolle gesetzt für {command}")
@@ -228,7 +221,12 @@ async def setcmdrole(interaction: discord.Interaction, command: str, role: disco
 # =========================
 @bot.event
 async def on_ready():
-    await bot.tree.sync()
+    try:
+        synced = await bot.tree.sync()
+        print(f"✅ Synced {len(synced)} Commands")
+    except Exception as e:
+        print("❌ Sync Fehler:", e)
+
     check_temp_bans.start()
     print("BOT ONLINE:", bot.user)
 
