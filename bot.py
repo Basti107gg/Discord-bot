@@ -1,11 +1,11 @@
 import os
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
+from datetime import datetime, timedelta
 
 TOKEN = os.getenv("TOKEN")
 
-if not TOKEN:
-    raise ValueError("TOKEN fehlt!")
+OWNER_ID = 1037047883133890560
 
 intents = discord.Intents.default()
 intents.members = True
@@ -13,205 +13,223 @@ intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # =========================
-# COMMAND ROLE SYSTEM
+# DATA
 # =========================
-command_roles = {}  # {"ping": [role_id, role_id]}
-
-
-def has_permission(interaction: discord.Interaction, cmd_name: str):
-    if interaction.user.guild.owner_id == interaction.user.id:
-        return True
-
-    allowed_roles = command_roles.get(cmd_name)
-
-    if not allowed_roles:
-        return True
-
-    return any(role.id in allowed_roles for role in interaction.user.roles)
-
+command_roles = {}
+global_bans = {}  # user_id: reason
+temp_bans = {}    # guild_id: {user_id: unban_time}
+perm_bans = {}    # guild_id: [user_ids]
 
 # =========================
-# TICKET SYSTEM
+# PERMISSION CHECK
 # =========================
-tickets = {}
-ticket_counter = 0
-ticket_roles = []
-
-
-def has_ticket_access(member: discord.Member):
-    if member.guild.owner_id == member.id:
+def has_permission(interaction, cmd):
+    if interaction.user.id == OWNER_ID:
         return True
-    if not ticket_roles:
+
+    roles = command_roles.get(cmd)
+    if not roles:
         return True
-    return any(r.id in ticket_roles for r in member.roles)
 
+    return any(r.id in roles for r in interaction.user.roles)
 
-class TicketPanel(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
+# =========================
+# AUTO UNBAN TASK
+# =========================
+@tasks.loop(seconds=10)
+async def check_temp_bans():
+    now = datetime.utcnow()
 
-    @discord.ui.button(label="🎫 Ticket erstellen", style=discord.ButtonStyle.green)
-    async def create(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(TicketModal())
+    for guild_id in list(temp_bans.keys()):
+        guild = bot.get_guild(guild_id)
+        if not guild:
+            continue
 
+        for user_id, unban_time in list(temp_bans[guild_id].items()):
+            if now >= unban_time:
+                try:
+                    user = await bot.fetch_user(user_id)
+                    await guild.unban(user)
+                except:
+                    pass
+                del temp_bans[guild_id][user_id]
 
-class TicketModal(discord.ui.Modal, title="Ticket erstellen"):
-    reason = discord.ui.TextInput(label="Grund", required=True)
+# =========================
+# GLOBAL BAN
+# =========================
+@bot.tree.command(name="globalban", description="Global bannen")
+async def globalban(interaction: discord.Interaction, user: discord.User, reason: str):
 
-    async def on_submit(self, interaction: discord.Interaction):
-        global ticket_counter
-        ticket_counter += 1
+    if interaction.user.id != OWNER_ID:
+        return await interaction.response.send_message("❌ Nur Owner", ephemeral=True)
 
-        guild = interaction.guild
-        user = interaction.user
+    global_bans[user.id] = reason
 
-        overwrites = {
-            guild.default_role: discord.PermissionOverwrite(view_channel=False),
-            user: discord.PermissionOverwrite(view_channel=True, send_messages=True),
-            guild.me: discord.PermissionOverwrite(view_channel=True)
-        }
-
-        channel = await guild.create_text_channel(
-            name=f"ticket-{ticket_counter}",
-            overwrites=overwrites
-        )
-
-        await channel.send(
-            embed=discord.Embed(
-                title="🎫 Ticket geöffnet",
-                description=f"{user.mention}\nGrund: {self.reason}",
-                color=0x00ff00
-            ),
-            view=TicketControlView()
-        )
-
-        tickets[channel.id] = {
-            "owner": user.id,
-            "claimed_by": None
-        }
-
-        await interaction.response.send_message("Ticket erstellt!", ephemeral=True)
-
-
-class TicketControlView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="📌 Übernehmen", style=discord.ButtonStyle.blurple)
-    async def claim(self, interaction: discord.Interaction, button: discord.ui.Button):
-
-        data = tickets.get(interaction.channel.id)
-
-        if not data:
-            return await interaction.response.send_message("Fehler", ephemeral=True)
-
-        if interaction.user.id == data["owner"]:
-            return await interaction.response.send_message("Eigene Tickets nicht übernehmen", ephemeral=True)
-
-        if data["claimed_by"]:
-            return await interaction.response.send_message("Schon übernommen", ephemeral=True)
-
-        if not has_ticket_access(interaction.user):
-            return await interaction.response.send_message("Keine Rechte", ephemeral=True)
-
-        data["claimed_by"] = interaction.user.id
-
-        await interaction.channel.send(f"📌 Übernommen von {interaction.user.mention}")
-        await interaction.response.send_message("OK", ephemeral=True)
-
-    @discord.ui.button(label="🔒 Schließen", style=discord.ButtonStyle.red)
-    async def close(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(CloseModal())
-
-
-class CloseModal(discord.ui.Modal, title="Ticket schließen"):
-    reason = discord.ui.TextInput(label="Grund", required=True)
-
-    async def on_submit(self, interaction: discord.Interaction):
-
-        data = tickets.get(interaction.channel.id)
-
-        if not data:
-            return await interaction.response.send_message("Fehler", ephemeral=True)
-
-        user = interaction.user
-
-        if not (user.guild_permissions.administrator or user.id in [data["owner"], data["claimed_by"]]):
-            return await interaction.response.send_message("Keine Rechte", ephemeral=True)
-
+    for guild in bot.guilds:
         try:
-            owner = await bot.fetch_user(data["owner"])
-            await owner.send(f"Ticket geschlossen\nGrund: {self.reason}")
+            await guild.ban(user, reason=reason)
         except:
             pass
 
-        await interaction.channel.delete()
-
+    await interaction.response.send_message(f"🌍 {user} global gebannt")
 
 # =========================
-# SLASH COMMANDS
+# GLOBAL UNBAN
 # =========================
+@bot.tree.command(name="globalunban", description="Global unban")
+async def globalunban(interaction: discord.Interaction, user: discord.User):
 
-@bot.tree.command(name="ping", description="Ping anzeigen")
-async def ping(interaction: discord.Interaction):
-    if not has_permission(interaction, "ping"):
-        return await interaction.response.send_message("Keine Rechte", ephemeral=True)
+    if interaction.user.id != OWNER_ID:
+        return await interaction.response.send_message("❌ Nur Owner", ephemeral=True)
 
-    await interaction.response.send_message(f"Pong {round(bot.latency*1000)}ms")
+    global_bans.pop(user.id, None)
 
+    for guild in bot.guilds:
+        try:
+            await guild.unban(user)
+        except:
+            pass
 
-@bot.tree.command(name="cmds", description="Alle Commands anzeigen")
-async def cmds(interaction: discord.Interaction):
-    embed = discord.Embed(title="Commands")
+    await interaction.response.send_message(f"🌍 {user} global entbannt")
 
-    for cmd in bot.tree.get_commands():
+# =========================
+# TEMP BAN
+# =========================
+@bot.tree.command(name="ban", description="Temporärer Ban")
+async def ban(interaction: discord.Interaction, member: discord.Member, minutes: int, reason: str):
+
+    if not has_permission(interaction, "ban"):
+        return await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
+
+    await member.ban(reason=reason)
+
+    if interaction.guild.id not in temp_bans:
+        temp_bans[interaction.guild.id] = {}
+
+    temp_bans[interaction.guild.id][member.id] = datetime.utcnow() + timedelta(minutes=minutes)
+
+    await interaction.response.send_message(f"⏳ {member} gebannt für {minutes} Minuten")
+
+# =========================
+# PERM BAN
+# =========================
+@bot.tree.command(name="permban", description="Permanent bannen")
+async def permban(interaction: discord.Interaction, member: discord.Member, reason: str):
+
+    if not has_permission(interaction, "permban"):
+        return await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
+
+    await member.ban(reason=reason)
+
+    if interaction.guild.id not in perm_bans:
+        perm_bans[interaction.guild.id] = []
+
+    perm_bans[interaction.guild.id].append(member.id)
+
+    await interaction.response.send_message(f"🔨 {member} permanent gebannt")
+
+# =========================
+# UNBAN
+# =========================
+@bot.tree.command(name="unban", description="Unban")
+async def unban(interaction: discord.Interaction, user: discord.User):
+
+    if not has_permission(interaction, "unban"):
+        return await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
+
+    try:
+        await interaction.guild.unban(user)
+    except:
+        pass
+
+    if interaction.guild.id in temp_bans:
+        temp_bans[interaction.guild.id].pop(user.id, None)
+
+    if interaction.guild.id in perm_bans:
+        if user.id in perm_bans[interaction.guild.id]:
+            perm_bans[interaction.guild.id].remove(user.id)
+
+    await interaction.response.send_message(f"✅ {user} entbannt")
+
+# =========================
+# BANLIST
+# =========================
+@bot.tree.command(name="banlist", description="Alle Bans anzeigen")
+async def banlist(interaction: discord.Interaction):
+
+    if not has_permission(interaction, "banlist"):
+        return await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
+
+    embed = discord.Embed(title="Banliste")
+
+    # Global
+    for uid, reason in global_bans.items():
+        embed.add_field(name=f"🌍 {uid}", value=f"Global: {reason}", inline=False)
+
+    # Temp
+    guild_temp = temp_bans.get(interaction.guild.id, {})
+    for uid, time in guild_temp.items():
+        embed.add_field(name=f"⏳ {uid}", value=f"Bis: {time}", inline=False)
+
+    # Perm
+    guild_perm = perm_bans.get(interaction.guild.id, [])
+    for uid in guild_perm:
+        embed.add_field(name=f"🔨 {uid}", value="Permanent", inline=False)
+
+    await interaction.response.send_message(embed=embed)
+
+# =========================
+# SERVERLIST
+# =========================
+@bot.tree.command(name="serverlist", description="Server Liste")
+async def serverlist(interaction: discord.Interaction):
+
+    if interaction.user.id != OWNER_ID:
+        return await interaction.response.send_message("❌ Nur Owner", ephemeral=True)
+
+    embed = discord.Embed(title="🌐 Serverliste")
+
+    for guild in bot.guilds:
+        invite = None
+
+        for ch in guild.text_channels:
+            try:
+                invite = await ch.create_invite(max_age=300)
+                break
+            except:
+                continue
+
         embed.add_field(
-            name=f"/{cmd.name}",
-            value=cmd.description or "Keine Beschreibung",
+            name=guild.name,
+            value=invite.url if invite else "❌ Kein Invite möglich",
             inline=False
         )
 
     await interaction.response.send_message(embed=embed)
 
-
-@bot.tree.command(name="ticketpanel", description="Ticket Panel senden")
-async def ticketpanel(interaction: discord.Interaction):
-    if not has_permission(interaction, "ticketpanel"):
-        return await interaction.response.send_message("Keine Rechte", ephemeral=True)
-
-    embed = discord.Embed(title="Ticket System", description="Button klicken")
-    await interaction.response.send_message(embed=embed, view=TicketPanel())
-
-
-@bot.tree.command(name="giverole", description="Rolle geben")
-async def giverole(interaction: discord.Interaction, member: discord.Member, role: discord.Role):
-    if not has_permission(interaction, "giverole"):
-        return await interaction.response.send_message("Keine Rechte", ephemeral=True)
-
-    await member.add_roles(role)
-    await interaction.response.send_message(f"{member.mention} hat Rolle {role.name} bekommen")
-
-
-@bot.tree.command(name="setcmdrole", description="Setzt Rollen für Command")
+# =========================
+# SET COMMAND ROLE
+# =========================
+@bot.tree.command(name="setcmdrole", description="Setzt Rolle für Command")
 async def setcmdrole(interaction: discord.Interaction, command: str, role: discord.Role):
+
     if interaction.guild.owner_id != interaction.user.id:
-        return await interaction.response.send_message("Nur Owner", ephemeral=True)
+        return await interaction.response.send_message("❌ Nur Owner", ephemeral=True)
 
     if command not in command_roles:
         command_roles[command] = []
 
     command_roles[command].append(role.id)
 
-    await interaction.response.send_message(f"Rolle gesetzt für /{command}")
-
+    await interaction.response.send_message(f"✅ Rolle gesetzt für {command}")
 
 # =========================
-# READY + SYNC
+# READY
 # =========================
 @bot.event
 async def on_ready():
     await bot.tree.sync()
+    check_temp_bans.start()
     print("BOT ONLINE:", bot.user)
-
 
 bot.run(TOKEN)
